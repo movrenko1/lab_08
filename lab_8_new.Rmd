@@ -1,0 +1,141 @@
+---
+title: "Лабораторная №8"
+output:
+  html_document:
+    df_print: paged
+---
+
+#Практика 8
+#Модели на основе деревьев
+
+#Деревья решений
+Данные: Boston {MASS}
+
+Загрузим таблицу с данными и добавим к ней переменную high.medv – “высокая стоимость домов” со значениями:0 и 1.
+
+```{r first}
+warning=F
+# Загрузка пакетов
+library('ISLR')              # набор данных Carseats
+library('GGally')            # матричный график разброса ggpairs()
+library('MASS')              # набор данных Boston
+library('randomForest')      # случайный лес randomForest()
+library('gbm')               # бустинг gbm()
+library('tree')
+# ядро генератора случайных чисел
+my.seed <- 4
+head(Boston)
+data(Boston) # открываем данные
+high.medv <- ifelse(Boston$medv <= 25, "0", "1")
+# присоединяем к таблице данных
+Boston <- cbind(Boston, high.medv)
+set.seed(my.seed)
+# матричные графики разброса переменных
+p <- ggpairs(Boston[, c(14, 1:4)], aes(color = high.medv))
+suppressMessages(print(p))
+p <- ggpairs(Boston[, c(14, 5:8)], aes(color = high.medv))
+suppressMessages(print(p))
+p <- ggpairs(Boston[, c(14, 9:13)], aes(color = high.medv))
+suppressMessages(print(p))
+```
+
+Судя по графикам, переменная классы 0 и 1 переменной  high.medv сопоставимы по размерам. Классы на графиках разброса объясняющих переменных сильно смешаны, поэтому модели с непрерывной разрешающей границей вряд ли сработают хорошо. Построим дерево для категориального отклика  high.medv, отбросив непрерывный отклик medv.
+
+```{r second}
+# модель бинарного  дерева
+tree.boston <- tree( high.medv~ . -medv, Boston)
+summary(tree.boston)
+# график результата
+plot(tree.boston)              # ветви
+text(tree.boston, pretty = 0)  # подписи
+tree.boston                  # посмотреть всё дерево в консоли
+# ядро генератора случайных чисел
+set.seed(my.seed)
+
+# обучающая выборка
+train <- sample(1:nrow(Boston), nrow(Boston)/2) # обучающая выборка -- 50%
+# тестовая выборка
+Boston.test <- Boston[-train,]
+high.medv.test <- high.medv[-train]
+# строим дерево на обучающей выборке
+tree.boston <- tree(high.medv~ . -medv, Boston, subset = train)
+# делаем прогноз
+tree.pred <- predict(tree.boston, Boston.test, type = "class")
+# матрица неточностей
+tbl <- table(tree.pred, high.medv.test)
+tbl
+# ACC на тестовой
+acc.test <- sum(diag(tbl))/sum(tbl)
+names(acc.test)[length(acc.test)] <- 'Boston.class.tree.all'
+acc.test
+```
+
+Обобщённая характеристика точности: доля верных прогнозов: 0.9.
+
+#Регрессионные деревья
+```{r third}
+# матричные графики разброса переменных
+p <- ggpairs(Boston[, c(14, 1:4)])
+suppressMessages(print(p))
+p <- ggpairs(Boston[, c(14, 5:8)])
+suppressMessages(print(p))
+p <- ggpairs(Boston[, c(14, 9:13)])
+suppressMessages(print(p))
+# обучаем модель
+Boston$high.medv <- as.numeric(Boston$high.medv)
+tree.boston <- tree(medv  ~ . , Boston, subset = train)
+summary(tree.boston)
+# визуализация
+plot(tree.boston)
+text(tree.boston, pretty = 0)
+
+# прогноз по лучшей модели 
+yhat <- predict(tree.boston, newdata = Boston[-train, ])
+boston.test <- Boston[-train, 'medv']
+# MSE 
+mse.test <- mean((yhat - boston.test)^2)
+mse.test
+# график "прогноз-реализация"
+plot(yhat, boston.test)
+# линия идеального прогноза
+abline(0, 1)
+
+```
+
+MSE на тестовой выборке равна 12.36.
+
+#Бустинг#
+
+Построим 5000 регрессионных деревьев с глубиной 4.
+```{r fourth}
+set.seed(my.seed)
+boost.boston <- gbm(medv ~ . , data = Boston[train, ], 
+                    distribution = "gaussian",
+                    n.trees = 5000, interaction.depth = 4)
+# график и таблица относительной важности переменных
+summary(boost.boston)
+# графики частной зависимости для важного предиктора
+par(mfrow = c(1, 2))
+plot(boost.boston, i = "high.medv")
+plot(boost.boston, i = "rm")
+plot(boost.boston, i = "lstat")
+# прогноз
+yhat.boost <- predict(boost.boston, newdata = Boston[-train, ], n.trees = 5000)
+# MSE на тестовой
+mse.test <- c(mse.test, mean((yhat.boost - boston.test)^2))
+mse.test
+# меняем значение гиперпараметра (lambda) на 0.2 -- аргумент shrinkage
+boost.boston <- gbm(medv ~ . , data = Boston[train, ], distribution = "gaussian",
+                    n.trees = 5000, interaction.depth = 4, 
+                    shrinkage = 0.2, verbose = F)
+
+# прогноз
+yhat.boost <- predict(boost.boston, newdata = Boston[-train, ], n.trees = 5000)
+
+# MSE на тестовой
+mse.test <- c(mse.test, mean((yhat.boost - boston.test)^2))
+names(mse.test)[length(mse.test)] <- 'Boston.boost.0.2'
+mse.test
+```
+
+Изменив гиперпараметр, мы наоборот немного повысили ошибку прогноза.
